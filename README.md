@@ -31,7 +31,7 @@ pipelines/
 		producer/                      # Publish events to Kafka
 		databricks/                    # Stream processing jobs
 	expected/batch/                  # Calculate player season averages
-app/                               # Streamlit interface
+streamlit/                            # Streamlit interface
 tests/                             # Pipeline tests
 ```
 
