@@ -42,9 +42,9 @@ The game ID is always treated as a parameter, never hardcoded. Any script or pip
 
 ## Files Built So Far
 
-`fetch_game.py`: takes a game ID as a CLI argument, calls the NHL API endpoint above, and saves the raw JSON response to disk as `play_by_play_{game_id}.json`. This is the entry point of the pipeline. It currently lacks error handling, timeouts, and retry logic, which should be added before this is considered production ready.
+`fetch_game.py`: takes a game ID as a CLI argument, calls the NHL API endpoint above, flattens the response in memory, and saves one JSON row per play as `play_by_play_{game_id}.jsonl` under `data/extracted/` by default. It does not persist the raw API response.
 
-`extract_plays.py`: reads the saved JSON, builds a player ID to name/team/position lookup from `rosterSpots`, and flattens each play event into a clean row containing game ID, event ID, period, time in period, event type, and the raw `details` object. This output is what the Kafka producer will publish, one row per Kafka message.
+`extract_plays.py`: can read an NHL game JSON file and flatten each play event into a row containing game ID, event ID, period, time in period, event type, and the raw `details` object. The JSONL output from `fetch_game.py` is what the Kafka producer will publish, one row per Kafka message.
 
 ## Not Yet Built
 

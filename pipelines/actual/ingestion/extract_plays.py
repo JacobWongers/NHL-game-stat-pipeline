@@ -51,7 +51,7 @@ def extract_plays(data: Any, game_id: int | None = None) -> list[dict[str, Any]]
 
 
 def load_plays(input_path: str | Path) -> list[dict[str, Any]]:
-	"""Load and flatten a JSON file produced by ``fetch_game.py``."""
+	"""Load and flatten an NHL game JSON file."""
 	#load the raw game response
 	path = Path(input_path)
 	with path.open(encoding="utf-8") as input_file:
@@ -86,7 +86,7 @@ def save_extracted_plays(
 
 def main() -> None:
 	parser = argparse.ArgumentParser(description="Flatten NHL play-by-play JSON into JSON rows.")
-	parser.add_argument("input_path", type=Path, help="JSON file produced by fetch_game.py")
+	parser.add_argument("input_path", type=Path, help="NHL game JSON file to flatten")
 	parser.add_argument(
 		"-o",
 		"--output",

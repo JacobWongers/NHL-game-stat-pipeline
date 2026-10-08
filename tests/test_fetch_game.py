@@ -47,24 +47,22 @@ class TestFetchGame(unittest.TestCase):
 		self.assertEqual(data, payload)
 		self.assertEqual(game_id, 2025030213)
 
-	@patch("pipelines.actual.ingestion.fetch_game.save_extracted_plays")
 	@patch("pipelines.actual.ingestion.fetch_game.fetch_play_by_play")
-	def test_save_game_writes_json_and_extracts_plays(self, mock_fetch, mock_save_extracted):
-		payload = {"plays": [{"eventId": 1}]}
+	def test_save_game_writes_jsonl_without_saving_json(self, mock_fetch):
+		payload = {"plays": [{"eventId": 1, "typeDescKey": "goal"}]}
 		mock_fetch.return_value = (payload, 2025030213)
 
 		with tempfile.TemporaryDirectory() as temp_dir:
 			output_path = save_game(2025030213, temp_dir)
 
-			self.assertEqual(output_path, Path(temp_dir) / "play_by_play_2025030213.json")
-			mock_save_extracted.assert_called_once_with(
-				output_path,
-				Path(__file__).parents[1] / "data" / "extracted" / "play_by_play_2025030213.jsonl",
-			)
-			with output_path.open() as output_file:
-				self.assertEqual(json.load(output_file), payload)
+			self.assertEqual(output_path, Path(temp_dir) / "play_by_play_2025030213.jsonl")
+			self.assertFalse(output_path.with_suffix(".json").exists())
+			rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+			self.assertEqual(len(rows), 1)
+			self.assertEqual(rows[0]["game_id"], 2025030213)
+			self.assertEqual(rows[0]["event_id"], 1)
+			self.assertEqual(rows[0]["event_type"], "goal")
 
 
 if __name__ == "__main__":
 	unittest.main()
-

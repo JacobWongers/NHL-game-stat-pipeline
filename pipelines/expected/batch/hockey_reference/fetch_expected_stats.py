@@ -294,7 +294,7 @@ def build_expected_baseline_for_game(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a Hockey Reference expected baseline from an NHL game roster.")
-    parser.add_argument("game_path", type=Path, help="Path to the raw NHL game JSON file produced by fetch_game.py")
+    parser.add_argument("game_path", type=Path, help="Path to a raw NHL game JSON file")
     parser.add_argument("--season", type=int, default=None, help="Optional season override. If omitted, it is inferred from the game date/season code.")
     parser.add_argument("--output", type=Path, help="Optional output path for the JSON baseline")
     args = parser.parse_args()
