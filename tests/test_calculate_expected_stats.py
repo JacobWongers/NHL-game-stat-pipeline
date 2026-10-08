@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipelines.expected.batch.calculate_expected_stats import (
+from pipelines.expected.calculate_expected_stats import (
     calculate_expected_stats,
     load_player_records,
 )

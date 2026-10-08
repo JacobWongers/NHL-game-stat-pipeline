@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 from google.cloud import bigquery
 
-from pipelines.expected.batch.load_to_bigquery import load_gcs_jsonl_to_bigquery
+from pipelines.expected.load_to_bigquery import load_gcs_jsonl_to_bigquery
 
 
 class TestLoadToBigquery(unittest.TestCase):

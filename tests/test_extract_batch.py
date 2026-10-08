@@ -1,6 +1,6 @@
 import unittest
 
-from pipelines.expected.batch.hockey_reference.extract_batch import build_bigquery_table_id, extract_team_stats
+from pipelines.expected.hockey_reference.extract_batch import build_bigquery_table_id, extract_team_stats
 
 
 class TestExtractBatch(unittest.TestCase):

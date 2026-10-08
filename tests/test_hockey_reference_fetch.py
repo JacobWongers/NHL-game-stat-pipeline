@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from pipelines.actual.ingestion.fetch_game import extract_game_roster
-from pipelines.expected.batch.hockey_reference.fetch_expected_stats import (
+from pipelines.expected.hockey_reference.fetch_expected_stats import (
     build_expected_baseline_for_game,
     parse_team_page_stats,
 )

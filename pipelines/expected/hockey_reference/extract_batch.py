@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from pipelines.expected.batch.load_to_bigquery import load_gcs_jsonl_to_bigquery
-from pipelines.expected.batch.upload_to_gcs import upload_file_to_gcs
-from pipelines.expected.batch.hockey_reference.fetch_expected_stats import fetch_team_stats
+from pipelines.expected.load_to_bigquery import load_gcs_jsonl_to_bigquery
+from pipelines.expected.upload_to_gcs import upload_file_to_gcs
+from pipelines.expected.hockey_reference.fetch_expected_stats import fetch_team_stats
 
 
 def extract_team_stats(
