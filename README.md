@@ -6,17 +6,20 @@ The project covers skaters and tracks goals, assists, and shots.
 
 ## Data Pipelines
 
-**Actual:** Replays a past game's play-by-play as a simulated live feed. The Streamlit actual view shows the score, shots, time remaining, and selected skater stats.
+**Actual:** Replays a past game's play-by-play as a simulated live feed. The Streamlit game summary shows the score and shots for both teams.
 
-Flow: Game play-by-play JSON → Kafka → S3 → Databricks bronze, silver, and gold Delta Lake tables → Streamlit actual view (left).
+Flow: Game play-by-play JSON → Kafka → S3 → Databricks bronze, silver, and gold Delta Lake tables → Streamlit game summary (left).
 
-**Expected:** Calculates each player's average goals, assists, and shots per game from season stats for both teams. The Streamlit expected view shows the selected skater's averages.
+**Expected:** Calculates each player's season totals and per-game averages for goals, assists, and shots from season stats for both teams. The Streamlit player view shows season totals and per-game averages alongside the player's game stats.
 
-Flow: Team season stats → Python script → Google Cloud Platform/BigQuery → Streamlit expected view (right).
+Flow: Team season stats → Python script → Google Cloud Platform/BigQuery → Streamlit player details (right).
 
 ## Streamlit Interface
 
-The interface displays actual stats on the left and expected stats on the right. Each side has a skater dropdown. Selecting a player shows their game stats on the actual side and season averages on the expected side.
+The interface uses two columns:
+
+- **Left — Game summary:** Displays both teams' logos, the game score, and shots for each team.
+- **Right — Player details:** A single player dropdown selects the skater to display. The player's headshot appears at the top, followed by their goals, assists, and shots in the game. Below the game stats, the interface shows their season goals and assists totals, then their average goals and assists per game.
 
 ## Project Structure
 
