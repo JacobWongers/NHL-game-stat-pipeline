@@ -46,7 +46,7 @@ def calculate_expected_stats(records: list[dict[str, Any]]) -> list[dict[str, An
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Calculate expected per-game skater stats for the Streamlit UI.")
-    parser.add_argument("input", type=Path, help="Input JSON or JSONL file containing player season stats")
+    parser.add_argument("input", type=Path, help="JSONL file containing player season stats")
     parser.add_argument(
         "--output",
         type=Path,
