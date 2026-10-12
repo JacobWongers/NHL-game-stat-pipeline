@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from pipelines.actual.ingestion.fetch_game import extract_game_roster
-from pipelines.expected.batch.hockey_reference.fetch_expected_stats import (
+from pipelines.expected.hockey_reference.fetch_expected_stats import (
     build_expected_baseline_for_game,
     parse_team_page_stats,
 )
@@ -69,6 +69,41 @@ class TestHockeyReferenceFetch(unittest.TestCase):
         self.assertEqual(baseline["Connor McDavid"]["team_abbrev"], "EDM")
         self.assertAlmostEqual(baseline["Connor McDavid"]["goals_per_game"], 20 / 39)
         self.assertEqual(baseline["Sid Crosby"]["team_abbrev"], "PIT")
+
+    def test_playoff_game_uses_regular_season_stats(self):
+        payload = {
+            "gameType": 3,
+            "rosterSpots": [
+                {
+                    "playerId": 1,
+                    "firstName": {"default": "Connor"},
+                    "lastName": {"default": "McDavid"},
+                    "teamId": 22,
+                    "positionCode": "C",
+                }
+            ],
+        }
+        phases = []
+
+        def fake_fetch(team_abbrev, season, playoffs=True):
+            phases.append(playoffs)
+            return [
+                {
+                    "player_name": "Connor McDavid",
+                    "goals": 20,
+                    "assists": 35,
+                    "shots": 200,
+                    "games_played": 39,
+                }
+            ]
+
+        build_expected_baseline_for_game(
+            payload,
+            season=2024,
+            fetch_team_stats_fn=fake_fetch,
+        )
+
+        self.assertEqual(phases, [False])
 
 
 if __name__ == "__main__":

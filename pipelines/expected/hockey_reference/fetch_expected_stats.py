@@ -227,7 +227,6 @@ def build_expected_baseline_for_game(
     if season is None:
         season = infer_season_from_game_data(game_data)
 
-    playoffs = str(game_data.get("gameType") or game_data.get("gameTypeId") or "") == "3"
     accepts_phase = "playoffs" in inspect.signature(resolved_fetcher).parameters
 
     baseline_by_player: dict[str, dict[str, Any]] = {}
@@ -240,7 +239,7 @@ def build_expected_baseline_for_game(
             if not team_abbrev:
                 continue
             if accepts_phase:
-                rows = resolved_fetcher(team_abbrev, season, playoffs=playoffs)
+                rows = resolved_fetcher(team_abbrev, season, playoffs=False)
             else:
                 rows = resolved_fetcher(team_abbrev, season)
             per_team_stats[team_id] = {normalize_name(row["player_name"]): row for row in rows}

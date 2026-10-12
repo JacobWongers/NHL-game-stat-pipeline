@@ -30,7 +30,7 @@ This path starts from a single game's play-by-play JSON pulled from the NHL API.
 
 ### Comparison and UI
 
-At query time, Streamlit reads the live rolling goals/assists/shots from the Databricks gold output and the historical baseline (and percentile rank) from the dbt mart. It compares the two directly and displays a delta per stat: how far above or below their normal baseline this skater is performing right now, in this specific game. The expected data is never sent through Kafka or Databricks.
+The Streamlit GUI fetches and extracts a requested game's play-by-play, saves it to local JSONL, then calculates per-skater actual goals, assists, and shots from those extracted events. It fetches the two teams' regular-season totals for the game's NHL season through the expected-stats extraction code and calculates per-game baselines with `calculate_expected_stats`, regardless of whether the selected game is preseason, regular season, or playoffs. It compares local actual game stats with those baselines. The GUI does not query Databricks or the dbt mart.
 
 ## Data Source Details
 
@@ -48,19 +48,17 @@ The game ID is always treated as a parameter, never hardcoded. Any script or pip
 
 ## Not Yet Built
 
-The Kafka producer that reads the extracted rows and publishes them to a topic with a delay between messages. The Databricks Structured Streaming consumer that reads that topic and computes rolling goals/assists/shots aggregates per skater. The batch path from Hockey Reference through BigQuery and dbt, including the percentile ranking logic. The Streamlit integration that reads the Databricks gold output and dbt mart and displays their comparison.
+The complete batch path from Hockey Reference through BigQuery and dbt, including the percentile ranking logic.
 
-## Streamlit App (Optional, Lowest Priority)
+## Streamlit App
 
-This is a thin visualization layer over the two completed outputs, not another ingestion path. It should not stream the expected data or contain batch transformation logic. Its job is to read the Databricks gold output and dbt mart directly, compare them, and display the result.
+`pipelines/actual/databricks/nhl_events_pipeline.py` defines the DLT bronze, silver, and gold tables. It retrieves Confluent credentials from the Databricks `confluent-keys` secret scope; credential values are not in source control. `streamlit/gui.py` accepts a game ID, fetches NHL play-by-play, extracts and saves event rows to local JSONL, and aggregates actual skater stats directly from that file. It then fetches the two teams' regular-season stats and calculates per-game averages for display. It does not connect to Kafka or Databricks, or run the expected-stats GCS/BigQuery batch load.
 
-Expected layout: a game ID selector so the user can pick which replayed game to view. A live-updating panel showing the selected skater's current rolling goals, assists, and shots for the game in progress, refreshing frequently since it is reading from the fast streaming path. A second panel showing that same skater's historical baseline and percentile rank for the same three stats, refreshing less frequently since dbt runs on a slower schedule. A delta or comparison view making it visually obvious whether the skater is over or under performing relative to their baseline right now.
-
-A working producer, consumer, one working dbt model against BigQuery, and the Streamlit comparison view form the complete demoable project.
+The expected stats remain a separate batch path; they are never sent through Kafka or Databricks.
 
 ## Build Order and Priority
 
-The recommended build order is batch path first to validate BigQuery and dbt, then the Kafka producer, then the Databricks streaming consumer, and Streamlit integration last. Streamlit depends on the dbt mart and Databricks gold output, but the expected data remains a direct batch-to-UI dependency rather than a streaming dependency.
+The project retains a separate Kafka/Databricks streaming pipeline, but the current Streamlit app no longer depends on it. The GUI needs access to the NHL API and Hockey Reference.
 
 ## Constraints to Respect in Any Code Suggestions
 

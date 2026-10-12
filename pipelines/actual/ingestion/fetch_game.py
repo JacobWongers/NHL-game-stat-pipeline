@@ -55,7 +55,10 @@ def extract_game_roster(game_data: dict) -> list[dict]:
 
 
 #fetches the play by play information using the unique game id
-def fetch_play_by_play(game_id: int | str) -> tuple[dict, int]:
+def fetch_play_by_play(
+    game_id: int | str,
+    retry_on_error: bool = True,
+) -> tuple[dict, int]:
     while True:
         try:
             game_id = int(game_id)
@@ -73,6 +76,9 @@ def fetch_play_by_play(game_id: int | str) -> tuple[dict, int]:
             return data, game_id
 
         except (urllib.error.HTTPError, urllib.error.URLError, ValueError, json.JSONDecodeError) as e:
+            if not retry_on_error:
+                raise ValueError(f"Unable to fetch NHL game {game_id}: {e}") from e
+
             print(f"Invalid or unavailable NHL game ID: {e}")
             retry = input("Enter a valid NHL game ID to try again, or press Enter to exit: ").strip()
 

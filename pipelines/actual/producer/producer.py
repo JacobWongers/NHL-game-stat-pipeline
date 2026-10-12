@@ -7,8 +7,8 @@ from typing import Any, Callable
 from confluent_kafka import Producer
 
 
-GAME_PERIOD_SECONDS = 20
-GAME_SPEEDUP = 40
+GAME_PERIOD_SECONDS = 20 * 60
+GAME_SPEEDUP = GAME_PERIOD_SECONDS / 5
 
 
 def game_time_seconds(event: dict[str, Any]) -> int:
@@ -63,9 +63,11 @@ def stream_events(
 	properties_path: str | Path = "kafka.properties",
 	producer: Producer | None = None,
 	sleep: Callable[[float], None] = time.sleep,
+	kafka_config: dict[str, str] | None = None,
 ) -> None:
-	"""Publish events using game-time gaps compressed into three minutes."""
-	kafka_producer = producer or Producer(load_properties(properties_path))
+	"""Publish events at a pace of five seconds per 20-minute period."""
+	producer_config = kafka_config if kafka_config is not None else load_properties(properties_path)
+	kafka_producer = producer or Producer(producer_config)
 	previous_time = None
 	for event in events:
 		current_time = game_time_seconds(event)

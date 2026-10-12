@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from pipelines.expected.batch.upload_to_gcs import upload_file_to_gcs
+from pipelines.expected.upload_to_gcs import upload_file_to_gcs
 
 
 class TestUploadToGcs(unittest.TestCase):
