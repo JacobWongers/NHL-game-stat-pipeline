@@ -30,7 +30,7 @@ This path starts from a single game's play-by-play JSON pulled from the NHL API.
 
 ### Comparison and UI
 
-At query time, Streamlit reads the live rolling goals/assists/shots from the Databricks gold output. It fetches the two teams' regular-season totals for the game's NHL season through the expected-stats extraction code and calculates per-game baselines with `calculate_expected_stats`, regardless of whether the selected game is preseason, regular season, or playoffs. The GUI currently does not query the dbt mart or display percentile ranks. It compares actual game stats with those baselines and displays the per-stat difference. Expected data is never sent through Kafka or Databricks.
+The Streamlit GUI fetches and extracts a requested game's play-by-play, saves it to local JSONL, then calculates per-skater actual goals, assists, and shots from those extracted events. It fetches the two teams' regular-season totals for the game's NHL season through the expected-stats extraction code and calculates per-game baselines with `calculate_expected_stats`, regardless of whether the selected game is preseason, regular season, or playoffs. It compares local actual game stats with those baselines. The GUI does not query Databricks or the dbt mart.
 
 ## Data Source Details
 
@@ -52,13 +52,13 @@ The complete batch path from Hockey Reference through BigQuery and dbt, includin
 
 ## Streamlit App
 
-`pipelines/actual/databricks/nhl_events_pipeline.py` defines the DLT bronze, silver, and gold tables. It retrieves Confluent credentials from the Databricks `confluent-keys` secret scope; credential values are not in source control. `streamlit/gui.py` accepts a game ID, fetches NHL play-by-play, extracts events, and publishes them to the configured Kafka topic. It waits for the matching rows in the Databricks gold table, then fetches the two teams' season stats and calculates totals and per-game averages for display. Those calculated records are saved locally; the GUI does not run the expected-stats GCS/BigQuery batch load. The app requires the Databricks streaming pipeline to already be running against the configured topic. Connection details and setup instructions are in the Streamlit section of `README.md`.
+`pipelines/actual/databricks/nhl_events_pipeline.py` defines the DLT bronze, silver, and gold tables. It retrieves Confluent credentials from the Databricks `confluent-keys` secret scope; credential values are not in source control. `streamlit/gui.py` accepts a game ID, fetches NHL play-by-play, extracts and saves event rows to local JSONL, and aggregates actual skater stats directly from that file. It then fetches the two teams' regular-season stats and calculates per-game averages for display. It does not connect to Kafka or Databricks, or run the expected-stats GCS/BigQuery batch load.
 
 The expected stats remain a separate batch path; they are never sent through Kafka or Databricks.
 
 ## Build Order and Priority
 
-The original recommended build order was batch path first to validate BigQuery and dbt, then the Kafka producer, the Databricks streaming consumer, and Streamlit integration last. The current Streamlit app orchestrates game ingestion and expected-stat extraction, but depends on a running Databricks consumer and configured Kafka and Databricks SQL access.
+The project retains a separate Kafka/Databricks streaming pipeline, but the current Streamlit app no longer depends on it. The GUI needs access to the NHL API and Hockey Reference.
 
 ## Constraints to Respect in Any Code Suggestions
 

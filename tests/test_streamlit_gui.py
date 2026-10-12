@@ -1,7 +1,7 @@
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 
 GUI_PATH = Path(__file__).parents[1] / "streamlit" / "gui.py"
@@ -13,32 +13,8 @@ GUI_SPEC.loader.exec_module(GUI)
 
 
 class TestStreamlitGui(unittest.TestCase):
-    def test_pipeline_config_accepts_kafka_credentials_from_secrets(self):
-        settings = {
-            "KAFKA_TOPIC": "events",
-            "DATABRICKS_SERVER_HOSTNAME": "workspace.example.com",
-            "DATABRICKS_HTTP_PATH": "/sql/warehouse",
-            "DATABRICKS_ACCESS_TOKEN": "test-token",
-        }
-        kafka_config = {
-            "bootstrap.servers": "broker.example:9092",
-            "security.protocol": "SASL_SSL",
-            "sasl.mechanisms": "PLAIN",
-            "sasl.username": "test-key",
-            "sasl.password": "test-secret",
-        }
-
-        with (
-            patch.object(GUI, "_setting", side_effect=lambda key, default="": settings.get(key, default)),
-            patch.object(GUI, "_secret_section", return_value=kafka_config),
-        ):
-            config, missing = GUI._pipeline_config()
-
-        self.assertEqual(missing, [])
-        self.assertEqual(config["kafka_config"], kafka_config)
-
-    def test_game_stats_and_team_totals_come_from_gold_records(self):
-        game_data = {
+    def setUp(self):
+        self.game_data = {
             "awayTeam": {"id": 7, "abbrev": "BUF"},
             "homeTeam": {"id": 8, "abbrev": "MTL"},
             "rosterSpots": [
@@ -68,90 +44,77 @@ class TestStreamlitGui(unittest.TestCase):
                 },
             ],
         }
-        gold_records = [
+        self.events = [
             {
-                "player_id": 101,
-                "player_name": "Away Skater",
-                "position": "C",
-                "sweater_number": 10,
-                "goals": 2,
-                "assists": 1,
-                "shots": 5,
+                "game_id": 2025030214,
+                "event_type": "goal",
+                "details": {
+                    "scoringPlayerId": 101,
+                    "assist1PlayerId": 102,
+                    "assist2PlayerId": None,
+                },
             },
             {
-                "player_id": 102,
-                "player_name": "Home Skater",
-                "position": "D",
-                "sweater_number": 20,
-                "goals": 1,
-                "assists": 3,
-                "shots": 4,
+                "game_id": 2025030214,
+                "event_type": "shot-on-goal",
+                "details": {"shootingPlayerId": 101},
+            },
+            {
+                "game_id": 2025030214,
+                "event_type": "goal",
+                "details": {
+                    "scoringPlayerId": 102,
+                    "assist1PlayerId": None,
+                    "assist2PlayerId": None,
+                },
             },
         ]
 
-        summary = GUI.build_gold_game_summary(game_data, gold_records)
+    def test_actual_stats_are_aggregated_from_extracted_events(self):
+        summary = GUI.build_game_summary(self.game_data, self.events)
 
         self.assertEqual(
             [(team["abbreviation"], team["goals"], team["shots"]) for team in summary["teams"]],
-            [("BUF", 2, 5), ("MTL", 1, 4)],
+            [("BUF", 1, 2), ("MTL", 1, 1)],
         )
-        away_skater = next(player for player in summary["players"] if player["id"] == "101")
+        players = {player["id"]: player for player in summary["players"]}
         self.assertEqual(
-            (away_skater["goals"], away_skater["assists"], away_skater["shots"]),
-            (2, 1, 5),
+            (players["101"]["goals"], players["101"]["assists"], players["101"]["shots"]),
+            (1, 0, 2),
         )
-        self.assertEqual(len(summary["players"]), 2)
-
-    def test_query_filters_gold_rows_by_game_id(self):
-        cursor = Mock()
-        cursor.description = [("game_id",), ("player_id",), ("goals",)]
-        cursor.fetchall.return_value = [(2025030214, 101, 2)]
-        connection = Mock()
-        connection.cursor.return_value = cursor
-
-        records = GUI._query_gold_records(connection, 2025030214, "catalog.schema.nhl_events_gold")
-
-        self.assertEqual(records, [{"game_id": 2025030214, "player_id": 101, "goals": 2}])
-        query, parameters = cursor.execute.call_args.args
-        self.assertIn("FROM `catalog`.`schema`.`nhl_events_gold`", query)
-        self.assertIn("WHERE game_id = :game_id", query)
-        self.assertEqual(parameters, {"game_id": 2025030214})
-        cursor.close.assert_called_once_with()
-
-    @patch("databricks.sql.connect")
-    def test_waits_for_active_players_and_stable_gold_results(self, mock_connect):
-        cursor = Mock()
-        cursor.description = [
-            ("game_id",),
-            ("player_id",),
-            ("player_name",),
-            ("position",),
-            ("sweater_number",),
-            ("headshot",),
-            ("goals",),
-            ("assists",),
-            ("shots",),
-        ]
-        cursor.fetchall.return_value = [
-            (2025030214, 101, "Away Skater", "C", 10, "", 1, 0, 3)
-        ]
-        connection = Mock()
-        connection.cursor.return_value = cursor
-        mock_connect.return_value = connection
-
-        records = GUI.wait_for_gold_records(
-            2025030214,
-            "catalog.schema.nhl_events_gold",
-            "workspace.cloud.databricks.com",
-            "/sql/warehouse",
-            "test-token",
-            {"101"},
-            poll_interval_seconds=0,
+        self.assertEqual(
+            (players["102"]["goals"], players["102"]["assists"], players["102"]["shots"]),
+            (1, 1, 1),
         )
+        self.assertNotIn("103", players)
 
-        self.assertEqual(records[0]["player_id"], 101)
-        self.assertEqual(cursor.execute.call_count, 6)
-        connection.close.assert_called_once_with()
+    def test_loads_events_from_saved_extracted_jsonl(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_dir = GUI.EXTRACTED_DIR
+            GUI.EXTRACTED_DIR = Path(temp_dir)
+            try:
+                path = GUI.save_event_rows(2025030214, self.events)
+                loaded = GUI.load_event_rows(path, 2025030214)
+            finally:
+                GUI.EXTRACTED_DIR = previous_dir
+
+        self.assertEqual(loaded, self.events)
+
+    def test_rejects_extracted_events_for_a_different_game_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "events.jsonl"
+            path.write_text('{"game_id":2025030212}\n', encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "game 2025030214"):
+                GUI.load_event_rows(path, 2025030214)
+
+    def test_rejects_an_empty_extracted_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "events.jsonl"
+            path.write_text("\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "contains no play-by-play events"):
+                GUI.load_event_rows(path, 2025030214)
 
 
 if __name__ == "__main__":
