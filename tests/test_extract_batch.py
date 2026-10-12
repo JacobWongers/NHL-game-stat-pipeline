@@ -12,7 +12,7 @@ class TestExtractBatch(unittest.TestCase):
     def test_extracts_stats_for_two_distinct_teams(self):
         calls = []
 
-        def fake_fetch(team_abbrev, season, playoffs=False):
+        def fake_fetch(team_abbrev, season, playoffs=True):
             calls.append((team_abbrev, season, playoffs))
             return [{"player_name": team_abbrev, "games_played": 1, "goals": 2, "assists": 3, "shots": 4}]
 
@@ -20,6 +20,17 @@ class TestExtractBatch(unittest.TestCase):
 
         self.assertEqual([record["team_abbrev"] for record in records], ["MTL", "BUF"])
         self.assertEqual(calls, [("MTL", 2026, False), ("BUF", 2026, False)])
+
+    def test_always_fetches_regular_season_stats(self):
+        calls = []
+
+        def fake_fetch(team_abbrev, season, playoffs=True):
+            calls.append(playoffs)
+            return [{"player_name": team_abbrev, "games_played": 1}]
+
+        extract_team_stats("MTL", "BUF", 2026, fetcher=fake_fetch)
+
+        self.assertEqual(calls, [False, False])
 
     def test_rejects_the_same_team_twice(self):
         with self.assertRaisesRegex(ValueError, "different teams"):

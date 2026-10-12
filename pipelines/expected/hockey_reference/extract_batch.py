@@ -12,17 +12,16 @@ def extract_team_stats(
     team_one: str,
     team_two: str,
     season: int,
-    playoffs: bool = False,
     fetcher: Callable[..., list[dict[str, Any]]] = fetch_team_stats,
 ) -> list[dict[str, Any]]:
-    """Return normalized Hockey Reference records for two distinct teams."""
+    """Return normalized regular-season Hockey Reference records for two teams."""
     team_abbrevs = [team_one.upper(), team_two.upper()]
     if team_abbrevs[0] == team_abbrevs[1]:
         raise ValueError("team_one and team_two must be different teams")
 
     records: list[dict[str, Any]] = []
     for team_abbrev in team_abbrevs:
-        for player in fetcher(team_abbrev, season, playoffs=playoffs):
+        for player in fetcher(team_abbrev, season, playoffs=False):
             records.append(
                 {
                     "player_name": player["player_name"],
@@ -58,7 +57,6 @@ def main() -> None:
         metavar=("TEAM1", "TEAM2"),
         help="Two different NHL team abbreviations, such as EDM CGY",
     )
-    parser.add_argument("--playoffs", action="store_true", help="Extract playoff stats instead of regular-season stats")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -79,7 +77,7 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        records = extract_team_stats(args.teams[0], args.teams[1], args.season, playoffs=args.playoffs)
+        records = extract_team_stats(args.teams[0], args.teams[1], args.season)
     except ValueError as error:
         parser.error(str(error))
 

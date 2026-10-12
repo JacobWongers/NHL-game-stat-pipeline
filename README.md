@@ -12,6 +12,8 @@ Flow: Game play-by-play JSON → Confluent Kafka → Databricks bronze, silver, 
 
 **Expected:** After the game stats arrive, the app fetches both teams' season stats, calculates totals and per-game averages for goals, assists, and shots, and displays the matching skater's baseline.
 
+Expected stats always use the regular-season table for the game's NHL season, whether the selected game is preseason, regular season, or playoffs.
+
 Flow used by the game-ID UI: Hockey Reference → `extract_batch` team extraction → `calculate_expected_stats` → Streamlit player details (right).
 
 ## Streamlit Interface

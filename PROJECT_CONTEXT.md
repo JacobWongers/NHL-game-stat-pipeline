@@ -30,7 +30,7 @@ This path starts from a single game's play-by-play JSON pulled from the NHL API.
 
 ### Comparison and UI
 
-At query time, Streamlit reads the live rolling goals/assists/shots from the Databricks gold output. It fetches the two teams' season totals through the expected-stats extraction code and calculates per-game baselines with `calculate_expected_stats`; the GUI currently does not query the dbt mart or display percentile ranks. It compares actual game stats with those baselines and displays the per-stat difference. Expected data is never sent through Kafka or Databricks.
+At query time, Streamlit reads the live rolling goals/assists/shots from the Databricks gold output. It fetches the two teams' regular-season totals for the game's NHL season through the expected-stats extraction code and calculates per-game baselines with `calculate_expected_stats`, regardless of whether the selected game is preseason, regular season, or playoffs. The GUI currently does not query the dbt mart or display percentile ranks. It compares actual game stats with those baselines and displays the per-stat difference. Expected data is never sent through Kafka or Databricks.
 
 ## Data Source Details
 

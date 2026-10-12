@@ -555,12 +555,10 @@ def main() -> None:
                             f"{team_abbreviations[0]} and {team_abbreviations[1]}..."
                         )
                     )
-                    game_type = str(game_data.get("gameType") or game_data.get("gameTypeId") or "")
                     raw_expected = extract_team_stats(
                         team_abbreviations[0],
                         team_abbreviations[1],
                         season,
-                        playoffs=game_type == "3",
                     )
                     expected_records = calculate_expected_stats(raw_expected)
                     save_expected_records(team_abbreviations, season, expected_records)
