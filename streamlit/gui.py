@@ -1,44 +1,77 @@
 import html
 import json
+import os
 import re
+import sys
+import time
 import unicodedata
 from pathlib import Path
-from typing import Any
+from urllib.error import URLError
 from urllib.parse import urlparse
+from typing import Any, Callable
 
 import streamlit as st
-
+from confluent_kafka import KafkaException
+from streamlit.errors import StreamlitSecretNotFoundError
+from databricks.sql.exc import Error as DatabricksSQLError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from pipelines.actual.ingestion.extract_plays import extract_plays
+from pipelines.actual.ingestion.fetch_game import fetch_play_by_play
+from pipelines.actual.producer.producer import stream_events
+from pipelines.expected.calculate_expected_stats import calculate_expected_stats
+from pipelines.expected.hockey_reference.extract_batch import extract_team_stats
+from pipelines.expected.hockey_reference.fetch_expected_stats import (
+    TEAM_ID_TO_ABBREV,
+    infer_season_from_game_data,
+)
+
+
 EXTRACTED_DIR = PROJECT_ROOT / "data" / "extracted"
 EXPECTED_DIR = PROJECT_ROOT / "data" / "expected"
+DEFAULT_KAFKA_PROPERTIES = PROJECT_ROOT / "kafka.properties"
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as input_file:
-        for line_number, line in enumerate(input_file, 1):
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if not isinstance(record, dict):
-                raise ValueError(f"{path}:{line_number} must contain a JSON object.")
-            records.append(record)
-    return records
+def _setting(name: str, default: str = "") -> str:
+    value = os.environ.get(name)
+    if value:
+        return value
+    try:
+        secret_value = st.secrets.get(name)
+    except StreamlitSecretNotFoundError:
+        secret_value = None
+    return str(secret_value or default)
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def load_game(path_string: str) -> list[dict[str, Any]]:
-    return read_jsonl(Path(path_string))
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def load_expected_stats(directory_string: str) -> list[dict[str, Any]]:
-    directory = Path(directory_string)
-    records: list[dict[str, Any]] = []
-    for path in sorted(directory.glob("*_SKATER_STATS.jsonl")):
-        records.extend(read_jsonl(path))
-    return records
+def _pipeline_config() -> tuple[dict[str, Any], list[str]]:
+    properties_path = Path(_setting("KAFKA_PROPERTIES", str(DEFAULT_KAFKA_PROPERTIES)))
+    gold_table = _setting("DATABRICKS_GOLD_TABLE", "nhl_events_gold")
+    config = {
+        "kafka_topic": _setting("KAFKA_TOPIC"),
+        "kafka_properties": properties_path,
+        "databricks_server": _setting("DATABRICKS_SERVER_HOSTNAME").removeprefix("https://"),
+        "databricks_http_path": _setting("DATABRICKS_HTTP_PATH"),
+        "databricks_token": _setting("DATABRICKS_ACCESS_TOKEN"),
+        "gold_table": gold_table,
+    }
+    missing = [
+        name
+        for name, value in (
+            ("KAFKA_TOPIC", config["kafka_topic"]),
+            ("DATABRICKS_SERVER_HOSTNAME", config["databricks_server"]),
+            ("DATABRICKS_HTTP_PATH", config["databricks_http_path"]),
+            ("DATABRICKS_ACCESS_TOKEN", config["databricks_token"]),
+        )
+        if not value
+    ]
+    if not properties_path.is_file():
+        missing.append(f"KAFKA_PROPERTIES file ({properties_path})")
+    if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*){0,2}", gold_table):
+        missing.append("valid DATABRICKS_GOLD_TABLE identifier")
+    return config, missing
 
 
 def _localized_name(value: Any) -> str:
@@ -47,29 +80,41 @@ def _localized_name(value: Any) -> str:
     return str(value or "")
 
 
-def _team_abbreviation(headshot_url: str) -> str:
-    parts = urlparse(headshot_url).path.split("/")
-    if len(parts) >= 2 and re.fullmatch(r"[A-Z0-9]{2,4}", parts[-2]):
-        return parts[-2]
-    return ""
-
-
 def _normalize_name(value: str) -> str:
     decomposed = unicodedata.normalize("NFKD", value)
     ascii_name = decomposed.encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^a-z0-9]", "", ascii_name.casefold())
 
 
-def build_game_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
-    roster: list[Any] = []
-    for event in events:
-        candidate_roster = event.get("roster_spots")
-        if isinstance(candidate_roster, list):
-            roster = candidate_roster
-            break
-
+def build_gold_game_summary(
+    game_data: dict[str, Any],
+    gold_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    roster = game_data.get("rosterSpots")
+    if not isinstance(roster, list):
+        raise ValueError("The NHL game response does not include a roster.")
     players: dict[str, dict[str, Any]] = {}
-    teams: dict[str, dict[str, Any]] = {}
+    team_by_id: dict[str, dict[str, Any]] = {}
+    game_teams: list[dict[str, Any]] = []
+
+    for side in ("away", "home"):
+        team_data = game_data.get(f"{side}Team")
+        if not isinstance(team_data, dict):
+            raise ValueError(f"The NHL game response does not include the {side} team.")
+        team_id = str(team_data.get("id") or team_data.get("teamId") or "")
+        abbreviation = str(team_data.get("abbrev") or "").upper()
+        if not team_id or not abbreviation:
+            raise ValueError(f"The NHL game response has incomplete {side} team details.")
+        team = {
+            "id": team_id,
+            "abbreviation": abbreviation,
+            "logo_url": f"https://assets.nhle.com/logos/nhl/svg/{abbreviation}_light.svg",
+            "side": side,
+            "goals": 0,
+            "shots": 0,
+        }
+        game_teams.append(team)
+        team_by_id[team_id] = team
 
     for roster_entry in roster:
         if not isinstance(roster_entry, dict):
@@ -81,19 +126,6 @@ def build_game_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
 
         team_key = str(team_id)
         headshot_url = str(roster_entry.get("headshot") or "")
-        abbreviation = _team_abbreviation(headshot_url)
-        teams[team_key] = {
-            "id": team_key,
-            "abbreviation": abbreviation or f"TEAM {len(teams) + 1}",
-            "logo_url": (
-                f"https://assets.nhle.com/logos/nhl/svg/{abbreviation}_light.svg"
-                if abbreviation
-                else ""
-            ),
-            "goals": 0,
-            "shots": 0,
-        }
-
         first_name = _localized_name(roster_entry.get("firstName"))
         last_name = _localized_name(roster_entry.get("lastName"))
         players[str(player_id)] = {
@@ -108,59 +140,22 @@ def build_game_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             "shots": 0,
         }
 
-    if not teams:
-        raise ValueError("The selected game feed does not contain a player roster.")
-
-    side_by_team: dict[str, str] = {}
-    previous_counts = {"awaySOG": 0, "homeSOG": 0, "awayScore": 0, "homeScore": 0}
-    for event in events:
-        details = event.get("details")
-        if not isinstance(details, dict):
+    for record in gold_records:
+        player_id = str(record.get("player_id") or "")
+        player = players.get(player_id)
+        if player is None:
             continue
-        event_type = event.get("event_type")
-        owner_id = details.get("eventOwnerTeamId")
-        owner_key = str(owner_id) if owner_id is not None else ""
-
-        if event_type == "shot-on-goal":
-            for count_key, side in (("awaySOG", "away"), ("homeSOG", "home")):
-                current = int(details.get(count_key, previous_counts[count_key]) or 0)
-                if current > previous_counts[count_key] and owner_key in teams:
-                    side_by_team[owner_key] = side
-                previous_counts[count_key] = max(previous_counts[count_key], current)
-            if owner_key in teams:
-                teams[owner_key]["shots"] += 1
-            shooter = details.get("shootingPlayerId")
-            if str(shooter) in players:
-                players[str(shooter)]["shots"] += 1
-
-        if event_type == "goal":
-            for count_key, side in (("awayScore", "away"), ("homeScore", "home")):
-                current = int(details.get(count_key, previous_counts[count_key]) or 0)
-                if current > previous_counts[count_key] and owner_key in teams:
-                    side_by_team[owner_key] = side
-                previous_counts[count_key] = max(previous_counts[count_key], current)
-
-            if owner_key in teams:
-                teams[owner_key]["goals"] += 1
-                teams[owner_key]["shots"] += 1
-            scorer = details.get("scoringPlayerId")
-            if str(scorer) in players:
-                players[str(scorer)]["goals"] += 1
-                players[str(scorer)]["shots"] += 1
-            for assist_key in ("assist1PlayerId", "assist2PlayerId"):
-                assister = details.get(assist_key)
-                if str(assister) in players:
-                    players[str(assister)]["assists"] += 1
-
-    ordered_team_ids = sorted(
-        teams,
-        key=lambda team_id: (
-            side_by_team.get(team_id) != "away",
-            teams[team_id]["abbreviation"],
-        ),
-    )
-    for index, team_id in enumerate(ordered_team_ids):
-        teams[team_id]["side"] = side_by_team.get(team_id, f"TEAM {index + 1}")
+        player["name"] = str(record.get("player_name") or player["name"])
+        player["position"] = str(record.get("position") or player["position"])
+        player["number"] = record.get("sweater_number") or player["number"]
+        player["headshot_url"] = str(record.get("headshot") or player["headshot_url"])
+        for stat in ("goals", "assists", "shots"):
+            player[stat] = int(record.get(stat) or 0)
+        team = team_by_id.get(player["team_id"])
+        if team is None:
+            continue
+        team["goals"] += player["goals"]
+        team["shots"] += player["shots"]
 
     skaters = [
         player for player in players.values()
@@ -168,20 +163,129 @@ def build_game_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     skaters.sort(key=lambda player: (player["name"].casefold(), player["team_id"]))
     return {
-        "teams": [teams[team_id] for team_id in ordered_team_ids],
+        "teams": game_teams,
         "players": skaters,
     }
 
 
-def season_for_game(game_id: Any) -> int | None:
-    date_prefix = str(game_id)[:8]
-    if len(date_prefix) != 8 or not date_prefix.isdigit():
-        return None
-    year = int(date_prefix[:4])
-    month = int(date_prefix[4:6])
-    if not 1 <= month <= 12:
-        return None
-    return year + 1 if month >= 10 else year
+def _active_player_ids(events: list[dict[str, Any]]) -> set[str]:
+    player_ids: set[str] = set()
+    for event in events:
+        details = event.get("details")
+        if not isinstance(details, dict):
+            continue
+        if event.get("event_type") == "shot-on-goal":
+            player_id = details.get("shootingPlayerId")
+            if player_id is not None:
+                player_ids.add(str(player_id))
+        elif event.get("event_type") == "goal":
+            for key in ("scoringPlayerId", "assist1PlayerId", "assist2PlayerId"):
+                player_id = details.get(key)
+                if player_id is not None:
+                    player_ids.add(str(player_id))
+    return player_ids
+
+
+def _query_gold_records(connection: Any, game_id: int, table_name: str) -> list[dict[str, Any]]:
+    quoted_table_name = ".".join(f"`{part}`" for part in table_name.split("."))
+    query = (
+        "SELECT game_id, player_id, player_name, position, sweater_number, "
+        "headshot, goals, assists, shots "
+        f"FROM {quoted_table_name} WHERE game_id = :game_id"
+    )
+    cursor = connection.cursor()
+    try:
+        cursor.execute(query, {"game_id": game_id})
+        if cursor.description is None:
+            raise RuntimeError("Databricks gold query returned no column metadata.")
+        column_names = [column[0] for column in cursor.description]
+        return [dict(zip(column_names, row)) for row in cursor.fetchall()]
+    finally:
+        cursor.close()
+
+
+def wait_for_gold_records(
+    game_id: int,
+    table_name: str,
+    server_hostname: str,
+    http_path: str,
+    access_token: str,
+    active_player_ids: set[str],
+    timeout_seconds: int = 300,
+    poll_interval_seconds: int = 5,
+    on_wait: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
+    from databricks import sql
+
+    connection = sql.connect(
+        server_hostname=server_hostname,
+        http_path=http_path,
+        access_token=access_token,
+    )
+    deadline = time.monotonic() + timeout_seconds
+    previous_snapshot: tuple[tuple[str, str, str, str], ...] | None = None
+    unchanged_reads = 0
+    try:
+        while time.monotonic() < deadline:
+            records = _query_gold_records(connection, game_id, table_name)
+            found_player_ids = {
+                str(record.get("player_id"))
+                for record in records
+                if record.get("player_id") is not None
+            }
+            snapshot = tuple(
+                sorted(
+                    (
+                        str(record.get("player_id")),
+                        str(record.get("goals") or 0),
+                        str(record.get("assists") or 0),
+                        str(record.get("shots") or 0),
+                    )
+                    for record in records
+                )
+            )
+            all_active_players_present = active_player_ids.issubset(found_player_ids)
+            if records and all_active_players_present:
+                unchanged_reads = unchanged_reads + 1 if snapshot == previous_snapshot else 0
+                if unchanged_reads >= 5:
+                    return records
+            else:
+                unchanged_reads = 0
+            previous_snapshot = snapshot
+            if on_wait is not None:
+                on_wait(len(found_player_ids), len(active_player_ids))
+            time.sleep(min(poll_interval_seconds, max(0, deadline - time.monotonic())))
+    finally:
+        connection.close()
+    raise TimeoutError(
+        f"Game {game_id} did not finish landing in Databricks gold within "
+        f"{timeout_seconds} seconds. Confirm that the Databricks pipeline is running "
+        f"and consuming the configured Kafka topic."
+    )
+
+
+def save_event_rows(game_id: int, events: list[dict[str, Any]]) -> Path:
+    EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
+    path = EXTRACTED_DIR / f"play_by_play_{game_id}.jsonl"
+    path.write_text(
+        "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    return path
+
+
+def save_expected_records(
+    teams: list[str],
+    season: int,
+    records: list[dict[str, Any]],
+) -> Path:
+    EXPECTED_DIR.mkdir(parents=True, exist_ok=True)
+    path = EXPECTED_DIR / f"{teams[0]}_{teams[1]}_{season}_SKATER_STATS.jsonl"
+    path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    return path
 
 
 def find_season_stats(
@@ -240,11 +344,7 @@ def _season_value(record: dict[str, Any] | None, stat: str) -> int | float | str
 def _per_game_value(record: dict[str, Any] | None, stat: str) -> str:
     if record is None:
         return "—"
-    total = float(record.get(stat, 0) or 0)
-    games_played = int(record.get("games_played", 0) or 0)
-    if games_played <= 0:
-        return "0.00"
-    return f"{total / games_played:.2f}"
+    return f"{float(record.get(f'{stat}_per_game', 0) or 0):.2f}"
 
 
 def main() -> None:
@@ -329,57 +429,169 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    game_paths = sorted(
-        (str(path) for path in EXTRACTED_DIR.glob("play_by_play_*.jsonl")),
-        key=lambda path: Path(path).stem.removeprefix("play_by_play_"),
-        reverse=True,
-    )
-    if not game_paths:
-        st.error(f"No game feeds found in `{EXTRACTED_DIR}`.")
-        st.stop()
-    game_options = {
-        f"Game {Path(path).stem.removeprefix('play_by_play_')}": path
-        for path in game_paths
-    }
-
     header_left, header_right = st.columns([1.3, 1])
     with header_left:
         st.markdown('<div class="eyebrow">Hockey analytics</div>', unsafe_allow_html=True)
         st.markdown('<h1 class="page-title">NHL Game Center</h1>', unsafe_allow_html=True)
         st.markdown(
-            '<div class="page-subtitle">Live game performance and season context</div>',
+            '<div class="page-subtitle">Enter a game ID to run the actual and expected stats pipelines.</div>',
             unsafe_allow_html=True,
         )
+    config, missing_settings = _pipeline_config()
     with header_right:
-        selected_game = st.selectbox(
-            "Choose a game feed",
-            list(game_options),
-            label_visibility="collapsed",
-        )
-        selected_path = game_options[selected_game]
+        if missing_settings:
+            st.warning(
+                "Pipeline configuration is incomplete: "
+                + ", ".join(missing_settings)
+                + ". Set these values in the environment or `.streamlit/secrets.toml`."
+            )
 
-    events = load_game(selected_path)
-    summary = build_game_summary(events)
-    teams = summary["teams"]
-    players = summary["players"]
-    if len(teams) != 2:
-        raise ValueError(
-            f"Expected two teams in {Path(selected_path).name}; found {len(teams)}."
+    with st.form("game_id_search"):
+        game_id_text = st.text_input(
+            "NHL game ID",
+            placeholder="Enter a 10-digit NHL game ID",
+            max_chars=10,
+            help="Submitting a valid ID fetches the NHL play-by-play, streams it to Kafka, "
+            "waits for Databricks gold, and builds the season baseline.",
         )
-    if not players:
-        st.error(f"No skaters found in `{Path(selected_path).name}`.")
-        st.stop()
+        submitted = st.form_submit_button("Run game pipeline", type="primary")
 
-    team_by_id = {team["id"]: team for team in teams}
-    for player in players:
-        player["team_abbreviation"] = team_by_id[player["team_id"]]["abbreviation"]
-    game_id = events[0].get("game_id")
-    game_season = season_for_game(game_id)
-    expected_records = load_expected_stats(str(EXPECTED_DIR))
+    if submitted:
+        st.session_state.pop("game_result", None)
+        if not re.fullmatch(r"\d{10}", game_id_text.strip()):
+            st.error("Enter a valid 10-digit NHL game ID.")
+        elif missing_settings:
+            st.error("Configure the pipeline settings above before running a game.")
+        else:
+            game_id = int(game_id_text.strip())
+            status: Any = None
+            try:
+                with st.status("Starting game pipeline...", expanded=True) as status:
+                    status.update(label=f"Fetching NHL game {game_id} and extracting plays...")
+                    game_data, valid_game_id = fetch_play_by_play(
+                        game_id,
+                        retry_on_error=False,
+                    )
+                    events = extract_plays(game_data, game_id=valid_game_id)
+                    if not events:
+                        raise ValueError(f"NHL game {game_id} has no play-by-play events.")
+                    save_event_rows(valid_game_id, events)
+
+                    status.update(
+                        label=f"Streaming {len(events)} game events to Kafka..."
+                    )
+                    stream_events(
+                        events,
+                        config["kafka_topic"],
+                        properties_path=config["kafka_properties"],
+                    )
+
+                    status.update(
+                        label="Waiting for the game stats to land in Databricks gold..."
+                    )
+
+                    def update_gold_status(found: int, expected: int) -> None:
+                        status.update(
+                            label=(
+                                "Waiting for Databricks gold "
+                                f"({found}/{expected} active skaters received)..."
+                            )
+                        )
+
+                    gold_records = wait_for_gold_records(
+                        valid_game_id,
+                        config["gold_table"],
+                        config["databricks_server"],
+                        config["databricks_http_path"],
+                        config["databricks_token"],
+                        _active_player_ids(events),
+                        on_wait=update_gold_status,
+                    )
+
+                    season = infer_season_from_game_data(game_data)
+                    away_data = game_data["awayTeam"]
+                    home_data = game_data["homeTeam"]
+                    team_abbreviations = [
+                        str(away_data.get("abbrev") or "").upper(),
+                        str(home_data.get("abbrev") or "").upper(),
+                    ]
+                    for index, team_data in enumerate((away_data, home_data)):
+                        if not team_abbreviations[index]:
+                            team_id = int(team_data.get("id") or team_data.get("teamId") or 0)
+                            team_abbreviations[index] = TEAM_ID_TO_ABBREV.get(team_id, "")
+                    if not all(team_abbreviations):
+                        raise ValueError("Could not determine both NHL team abbreviations.")
+
+                    status.update(
+                        label=(
+                            f"Fetching {season - 1}-{str(season)[-2:]} expected stats for "
+                            f"{team_abbreviations[0]} and {team_abbreviations[1]}..."
+                        )
+                    )
+                    game_type = str(game_data.get("gameType") or game_data.get("gameTypeId") or "")
+                    raw_expected = extract_team_stats(
+                        team_abbreviations[0],
+                        team_abbreviations[1],
+                        season,
+                        playoffs=game_type == "3",
+                    )
+                    expected_records = calculate_expected_stats(raw_expected)
+                    save_expected_records(team_abbreviations, season, expected_records)
+
+                    summary = build_gold_game_summary(game_data, gold_records)
+                    team_by_id = {team["id"]: team for team in summary["teams"]}
+                    for player in summary["players"]:
+                        player["team_abbreviation"] = team_by_id[player["team_id"]]["abbreviation"]
+                    st.session_state["game_result"] = {
+                        "game_id": valid_game_id,
+                        "season": season,
+                        "events": events,
+                        "teams": summary["teams"],
+                        "players": summary["players"],
+                        "expected_records": expected_records,
+                    }
+                    status.update(
+                        label=f"Game {valid_game_id} is ready.",
+                        state="complete",
+                        expanded=False,
+                    )
+            except (
+                ValueError,
+                OSError,
+                URLError,
+                KafkaException,
+                DatabricksSQLError,
+                ImportError,
+            ) as error:
+                if status is not None:
+                    status.update(
+                        label=f"Game {game_id} could not be loaded.",
+                        state="error",
+                        expanded=True,
+                    )
+                st.error(f"Game pipeline failed ({type(error).__name__}): {error}")
+
+    result = st.session_state.get("game_result")
+    if result is None:
+        if not submitted:
+            st.info(
+                "Enter a game ID and run the pipeline. Player game stats will display "
+                "after that game appears in the Databricks gold table."
+            )
+        return
+
+    teams = result["teams"]
+    players = result["players"]
+    game_season = result["season"]
+    expected_records = result["expected_records"]
     game_status = (
         "FINAL"
-        if any(event.get("event_type") == "game-end" for event in events)
-        else "LIVE"
+        if any(event.get("event_type") == "game-end" for event in result["events"])
+        else "GAME FEED"
+    )
+    st.markdown(
+        f'<div class="section-caption">Game ID: {result["game_id"]}</div>',
+        unsafe_allow_html=True,
     )
 
     left, right = st.columns([1.08, 1], gap="large")

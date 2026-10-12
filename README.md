@@ -6,13 +6,13 @@ The project covers skaters and tracks goals, assists, and shots.
 
 ## Data Pipelines
 
-**Actual:** Replays a past game's play-by-play as a simulated live feed. The Streamlit game summary shows the score and shots for both teams.
+**Actual:** The user enters an NHL game ID in Streamlit. The app fetches and extracts the play-by-play, streams its events to the configured Kafka topic, then reads the per-skater game totals from the Databricks gold table.
 
-Flow: Game play-by-play JSON → Kafka → S3 → Databricks bronze, silver, and gold Delta Lake tables → Streamlit game summary (left).
+Flow: Game play-by-play JSON → Confluent Kafka → Databricks bronze, silver, and gold tables → Streamlit game summary (left).
 
-**Expected:** Calculates each player's season totals and per-game averages for goals, assists, and shots from season stats for both teams. The Streamlit player view shows season totals and per-game averages alongside the player's game stats.
+**Expected:** After the game stats arrive, the app fetches both teams' season stats, calculates totals and per-game averages for goals, assists, and shots, and displays the matching skater's baseline.
 
-Flow: Team season stats → Python script → Google Cloud Platform/BigQuery → Streamlit player details (right).
+Flow used by the game-ID UI: Hockey Reference → `extract_batch` team extraction → `calculate_expected_stats` → Streamlit player details (right).
 
 ## Streamlit Interface
 
@@ -22,10 +22,38 @@ Run the interface from the repository root:
 streamlit run streamlit/gui.py
 ```
 
-The interface uses two panels based on the game-center layout:
+Enter a 10-digit NHL game ID and select **Run game pipeline**. The app performs these steps:
 
-- **Game scoreboard:** Select a local feed from `data/extracted/` to see both teams' logos, the final score, and goals and shots for each team.
-- **Player spotlight:** Select a skater to see their headshot and goals, assists, and shots in that game. Season totals and per-game averages are shown when a matching player, team, and season are available in `data/expected/`; otherwise the UI identifies the missing baseline.
+1. Fetch the game's NHL play-by-play and extract its events.
+2. Stream those events to the configured Kafka topic.
+3. Wait for the active skaters' totals to arrive in Databricks gold.
+4. Fetch both teams' season stats and calculate the season totals and per-game averages.
+5. Show the gold-layer game stats and expected season stats side by side.
+
+The Databricks streaming pipeline must already be running and consuming the same Kafka topic. The app waits up to five minutes for gold-layer rows and reports a timeout if they do not arrive.
+
+### Streamlit Configuration
+
+Provide the following settings through environment variables or `.streamlit/secrets.toml`. The producer topic must match the Databricks pipeline topic; both default to `events`.
+
+```toml
+KAFKA_TOPIC = "events"
+KAFKA_PROPERTIES = "/absolute/path/to/kafka.properties"
+DATABRICKS_SERVER_HOSTNAME = "your-workspace.cloud.databricks.com"
+DATABRICKS_HTTP_PATH = "/sql/1.0/warehouses/your-warehouse-id"
+DATABRICKS_ACCESS_TOKEN = "your-token"
+DATABRICKS_GOLD_TABLE = "catalog.schema.nhl_events_gold"
+```
+
+`KAFKA_PROPERTIES` defaults to the repository's ignored `kafka.properties` file. Keep the Confluent credentials in that local file, not in source code or committed configuration. The repository also ignores `confluent_keys.txt`.
+
+### Databricks Streaming Pipeline
+
+The DLT source is [nhl_events_pipeline.py](./pipelines/actual/databricks/nhl_events_pipeline.py). Create or update a Databricks pipeline using this Python source, and set its target catalog and schema. The app's `DATABRICKS_GOLD_TABLE` must point to that pipeline's `nhl_events_gold` table.
+
+Create a Databricks secret scope named `confluent-keys` and add secrets named `api-key`, `api-secret`, and `bootstrap-server`. The pipeline retrieves these values with `dbutils.secrets.get`; the values themselves are never stored in this repository. Set the pipeline Spark configuration `nhl.kafka.topic` to the same topic as `KAFKA_TOPIC` (default `events`). Leave the pipeline running before submitting a game ID in Streamlit.
+
+The gold table exposes `game_id`, `player_id`, `player_name`, `position`, `sweater_number`, `headshot`, `goals`, `assists`, and `shots`. `DATABRICKS_GOLD_TABLE` defaults to `nhl_events_gold`; use a catalog- and schema-qualified name when required by your workspace.
 
 ## Project Structure
 

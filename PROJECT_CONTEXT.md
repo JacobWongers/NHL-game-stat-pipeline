@@ -30,7 +30,7 @@ This path starts from a single game's play-by-play JSON pulled from the NHL API.
 
 ### Comparison and UI
 
-At query time, Streamlit reads the live rolling goals/assists/shots from the Databricks gold output and the historical baseline (and percentile rank) from the dbt mart. It compares the two directly and displays a delta per stat: how far above or below their normal baseline this skater is performing right now, in this specific game. The expected data is never sent through Kafka or Databricks.
+At query time, Streamlit reads the live rolling goals/assists/shots from the Databricks gold output. It fetches the two teams' season totals through the expected-stats extraction code and calculates per-game baselines with `calculate_expected_stats`; the GUI currently does not query the dbt mart or display percentile ranks. It compares actual game stats with those baselines and displays the per-stat difference. Expected data is never sent through Kafka or Databricks.
 
 ## Data Source Details
 
@@ -48,19 +48,17 @@ The game ID is always treated as a parameter, never hardcoded. Any script or pip
 
 ## Not Yet Built
 
-The Kafka producer that reads the extracted rows and publishes them to a topic with a delay between messages. The Databricks Structured Streaming consumer that reads that topic and computes rolling goals/assists/shots aggregates per skater. The batch path from Hockey Reference through BigQuery and dbt, including the percentile ranking logic. The Streamlit integration that reads the Databricks gold output and dbt mart and displays their comparison.
+The complete batch path from Hockey Reference through BigQuery and dbt, including the percentile ranking logic.
 
-## Streamlit App (Optional, Lowest Priority)
+## Streamlit App
 
-This is a thin visualization layer over the two completed outputs, not another ingestion path. It should not stream the expected data or contain batch transformation logic. Its job is to read the Databricks gold output and dbt mart directly, compare them, and display the result.
+`pipelines/actual/databricks/nhl_events_pipeline.py` defines the DLT bronze, silver, and gold tables. It retrieves Confluent credentials from the Databricks `confluent-keys` secret scope; credential values are not in source control. `streamlit/gui.py` accepts a game ID, fetches NHL play-by-play, extracts events, and publishes them to the configured Kafka topic. It waits for the matching rows in the Databricks gold table, then fetches the two teams' season stats and calculates totals and per-game averages for display. Those calculated records are saved locally; the GUI does not run the expected-stats GCS/BigQuery batch load. The app requires the Databricks streaming pipeline to already be running against the configured topic. Connection details and setup instructions are in the Streamlit section of `README.md`.
 
-Expected layout: a game ID selector so the user can pick which replayed game to view. A live-updating panel showing the selected skater's current rolling goals, assists, and shots for the game in progress, refreshing frequently since it is reading from the fast streaming path. A second panel showing that same skater's historical baseline and percentile rank for the same three stats, refreshing less frequently since dbt runs on a slower schedule. A delta or comparison view making it visually obvious whether the skater is over or under performing relative to their baseline right now.
-
-A working producer, consumer, one working dbt model against BigQuery, and the Streamlit comparison view form the complete demoable project.
+The expected stats remain a separate batch path; they are never sent through Kafka or Databricks.
 
 ## Build Order and Priority
 
-The recommended build order is batch path first to validate BigQuery and dbt, then the Kafka producer, then the Databricks streaming consumer, and Streamlit integration last. Streamlit depends on the dbt mart and Databricks gold output, but the expected data remains a direct batch-to-UI dependency rather than a streaming dependency.
+The original recommended build order was batch path first to validate BigQuery and dbt, then the Kafka producer, the Databricks streaming consumer, and Streamlit integration last. The current Streamlit app orchestrates game ingestion and expected-stat extraction, but depends on a running Databricks consumer and configured Kafka and Databricks SQL access.
 
 ## Constraints to Respect in Any Code Suggestions
 

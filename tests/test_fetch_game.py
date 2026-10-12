@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from pipelines.actual.ingestion.fetch_game import fetch_play_by_play, save_game
@@ -46,6 +47,29 @@ class TestFetchGame(unittest.TestCase):
 
 		self.assertEqual(data, payload)
 		self.assertEqual(game_id, 2025030213)
+
+	@patch("pipelines.actual.ingestion.fetch_game.input")
+	def test_invalid_id_can_fail_without_prompting_for_retry(self, mock_input):
+		with self.assertRaisesRegex(ValueError, "positive integer"):
+			fetch_play_by_play(0, retry_on_error=False)
+
+		mock_input.assert_not_called()
+
+	@patch("pipelines.actual.ingestion.fetch_game.input")
+	def test_unavailable_game_id_fails_without_prompting_for_retry(self, mock_input):
+		mock_urlopen = self.mock_response({})
+		mock_urlopen.side_effect = HTTPError(
+			"https://api-web.nhle.com/v1/gamecenter/2025000000/play-by-play",
+			404,
+			"Not Found",
+			{},
+			None,
+		)
+
+		with self.assertRaisesRegex(ValueError, "Unable to fetch NHL game"):
+			fetch_play_by_play(2025000000, retry_on_error=False)
+
+		mock_input.assert_not_called()
 
 	@patch("pipelines.actual.ingestion.fetch_game.fetch_play_by_play")
 	def test_save_game_writes_jsonl_without_saving_json(self, mock_fetch):
