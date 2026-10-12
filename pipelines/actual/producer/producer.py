@@ -63,9 +63,11 @@ def stream_events(
 	properties_path: str | Path = "kafka.properties",
 	producer: Producer | None = None,
 	sleep: Callable[[float], None] = time.sleep,
+	kafka_config: dict[str, str] | None = None,
 ) -> None:
 	"""Publish events at a pace of five seconds per 20-minute period."""
-	kafka_producer = producer or Producer(load_properties(properties_path))
+	producer_config = kafka_config if kafka_config is not None else load_properties(properties_path)
+	kafka_producer = producer or Producer(producer_config)
 	previous_time = None
 	for event in events:
 		current_time = game_time_seconds(event)

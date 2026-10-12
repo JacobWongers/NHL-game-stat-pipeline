@@ -13,6 +13,30 @@ GUI_SPEC.loader.exec_module(GUI)
 
 
 class TestStreamlitGui(unittest.TestCase):
+    def test_pipeline_config_accepts_kafka_credentials_from_secrets(self):
+        settings = {
+            "KAFKA_TOPIC": "events",
+            "DATABRICKS_SERVER_HOSTNAME": "workspace.example.com",
+            "DATABRICKS_HTTP_PATH": "/sql/warehouse",
+            "DATABRICKS_ACCESS_TOKEN": "test-token",
+        }
+        kafka_config = {
+            "bootstrap.servers": "broker.example:9092",
+            "security.protocol": "SASL_SSL",
+            "sasl.mechanisms": "PLAIN",
+            "sasl.username": "test-key",
+            "sasl.password": "test-secret",
+        }
+
+        with (
+            patch.object(GUI, "_setting", side_effect=lambda key, default="": settings.get(key, default)),
+            patch.object(GUI, "_secret_section", return_value=kafka_config),
+        ):
+            config, missing = GUI._pipeline_config()
+
+        self.assertEqual(missing, [])
+        self.assertEqual(config["kafka_config"], kafka_config)
+
     def test_game_stats_and_team_totals_come_from_gold_records(self):
         game_data = {
             "awayTeam": {"id": 7, "abbrev": "BUF"},

@@ -21,3 +21,6 @@ PAT.txt
 #aws stuff
 *.zip
 aws/
+
+#local Streamlit credentials
+.streamlit/secrets.toml

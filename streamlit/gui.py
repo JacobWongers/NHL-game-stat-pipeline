@@ -8,6 +8,7 @@ import unicodedata
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlparse
+from collections.abc import Mapping
 from typing import Any, Callable
 
 import streamlit as st
@@ -46,12 +47,24 @@ def _setting(name: str, default: str = "") -> str:
     return str(secret_value or default)
 
 
+def _secret_section(name: str) -> dict[str, str]:
+    try:
+        section = st.secrets.get(name, {})
+    except StreamlitSecretNotFoundError:
+        return {}
+    if not isinstance(section, Mapping):
+        return {}
+    return {str(key): str(value) for key, value in section.items()}
+
+
 def _pipeline_config() -> tuple[dict[str, Any], list[str]]:
     properties_path = Path(_setting("KAFKA_PROPERTIES", str(DEFAULT_KAFKA_PROPERTIES)))
+    kafka_config = _secret_section("kafka")
     gold_table = _setting("DATABRICKS_GOLD_TABLE", "nhl_events_gold")
     config = {
         "kafka_topic": _setting("KAFKA_TOPIC"),
         "kafka_properties": properties_path,
+        "kafka_config": kafka_config,
         "databricks_server": _setting("DATABRICKS_SERVER_HOSTNAME").removeprefix("https://"),
         "databricks_http_path": _setting("DATABRICKS_HTTP_PATH"),
         "databricks_token": _setting("DATABRICKS_ACCESS_TOKEN"),
@@ -67,8 +80,21 @@ def _pipeline_config() -> tuple[dict[str, Any], list[str]]:
         )
         if not value
     ]
-    if not properties_path.is_file():
-        missing.append(f"KAFKA_PROPERTIES file ({properties_path})")
+    if kafka_config:
+        required_kafka_settings = (
+            "bootstrap.servers",
+            "security.protocol",
+            "sasl.mechanisms",
+            "sasl.username",
+            "sasl.password",
+        )
+        missing.extend(
+            f"[kafka].{name}"
+            for name in required_kafka_settings
+            if not kafka_config.get(name)
+        )
+    elif not properties_path.is_file():
+        missing.append(f"[kafka] settings or KAFKA_PROPERTIES file ({properties_path})")
     if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*){0,2}", gold_table):
         missing.append("valid DATABRICKS_GOLD_TABLE identifier")
     return config, missing
@@ -484,6 +510,7 @@ def main() -> None:
                         events,
                         config["kafka_topic"],
                         properties_path=config["kafka_properties"],
+                        kafka_config=config["kafka_config"] or None,
                     )
 
                     status.update(

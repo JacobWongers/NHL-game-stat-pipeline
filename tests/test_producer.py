@@ -2,12 +2,30 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from pipelines.actual.producer.producer import game_time_seconds, load_events, stream_events
 
 
 class TestProducer(unittest.TestCase):
+	def test_stream_events_builds_producer_from_supplied_config(self):
+		kafka_config = {
+			"bootstrap.servers": "broker.example:9092",
+			"security.protocol": "SASL_SSL",
+			"sasl.mechanisms": "PLAIN",
+			"sasl.username": "test-key",
+			"sasl.password": "test-secret",
+		}
+
+		with patch("pipelines.actual.producer.producer.Producer") as producer_class:
+			stream_events(
+				[{"game_id": 99, "event_id": 1, "period": 1, "time_in_period": "00:00"}],
+				"plays",
+				kafka_config=kafka_config,
+			)
+
+		producer_class.assert_called_once_with(kafka_config)
+
 	def test_streams_events_with_scaled_game_time_gaps(self):
 		events = [
 			{"game_id": 99, "event_id": 1, "period": 1, "time_in_period": "00:00"},

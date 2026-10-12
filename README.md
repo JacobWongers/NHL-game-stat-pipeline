@@ -34,18 +34,25 @@ The Databricks streaming pipeline must already be running and consuming the same
 
 ### Streamlit Configuration
 
-Provide the following settings through environment variables or `.streamlit/secrets.toml`. The producer topic must match the Databricks pipeline topic; both default to `events`.
+Store the app settings in the git-ignored `.streamlit/secrets.toml`. The producer topic must match the Databricks pipeline topic.
 
 ```toml
 KAFKA_TOPIC = "events"
-KAFKA_PROPERTIES = "/absolute/path/to/kafka.properties"
 DATABRICKS_SERVER_HOSTNAME = "your-workspace.cloud.databricks.com"
 DATABRICKS_HTTP_PATH = "/sql/1.0/warehouses/your-warehouse-id"
 DATABRICKS_ACCESS_TOKEN = "your-token"
 DATABRICKS_GOLD_TABLE = "catalog.schema.nhl_events_gold"
+
+[kafka]
+"bootstrap.servers" = "your-bootstrap-server"
+"security.protocol" = "SASL_SSL"
+"sasl.mechanisms" = "PLAIN"
+"sasl.username" = "your-api-key"
+"sasl.password" = "your-api-secret"
+resource_id = "your-cluster-resource-id"
 ```
 
-`KAFKA_PROPERTIES` defaults to the repository's ignored `kafka.properties` file. Keep the Confluent credentials in that local file, not in source code or committed configuration. The repository also ignores `confluent_keys.txt`.
+The Kafka producer reads its connection settings from the `[kafka]` section. If that section is absent, it falls back to the ignored `kafka.properties` file (configurable with `KAFKA_PROPERTIES`). Keep credential values out of source code and committed configuration.
 
 ### Databricks Streaming Pipeline
 
