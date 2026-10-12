@@ -16,10 +16,16 @@ Flow: Team season stats → Python script → Google Cloud Platform/BigQuery →
 
 ## Streamlit Interface
 
-The interface uses two columns:
+Run the interface from the repository root:
 
-- **Left — Game summary:** Displays both teams' logos, the game score, and shots for each team.
-- **Right — Player details:** A single player dropdown selects the skater to display. The player's headshot appears at the top, followed by their goals, assists, and shots in the game. Below the game stats, the interface shows their season goals and assists totals, then their average goals and assists per game.
+```bash
+streamlit run streamlit/gui.py
+```
+
+The interface uses two panels based on the game-center layout:
+
+- **Game scoreboard:** Select a local feed from `data/extracted/` to see both teams' logos, the final score, and goals and shots for each team.
+- **Player spotlight:** Select a skater to see their headshot and goals, assists, and shots in that game. Season totals and per-game averages are shown when a matching player, team, and season are available in `data/expected/`; otherwise the UI identifies the missing baseline.
 
 ## Project Structure
 
